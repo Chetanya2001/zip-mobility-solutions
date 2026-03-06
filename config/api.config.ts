@@ -6,6 +6,7 @@ export const API_CONFIG = {
 
 // API Endpoints
 export const API_ENDPOINTS = {
+  GET_ALL_CARS: "/cars",
   SEARCH_CARS: "/cars/search",
   SEARCH_INTERCITY_CARS: "/cars/search-intercity",
 

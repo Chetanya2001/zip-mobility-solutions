@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -8,7 +8,8 @@ import {
   Image,
   Dimensions,
   StatusBar,
-  Platform,
+  ActivityIndicator,
+  RefreshControl,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
@@ -20,329 +21,466 @@ import {
   FONT_WEIGHTS,
   BORDER_RADIUS,
 } from "../../../constants/theme";
+import { useAuthStore } from "../../../store/auth.store";
+import {
+  API_CONFIG,
+  API_ENDPOINTS,
+  getHeaders,
+} from "../../../config/api.config";
 
 const { width } = Dimensions.get("window");
-const CARD_WIDTH = width - SPACING.xl * 2;
 
-interface ServiceCard {
-  id: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  title: string;
-  subtitle: string;
-  route: string;
-}
-
-interface FeaturedDeal {
-  id: string;
-  title: string;
-  subtitle: string;
-  badge?: string;
-  image: string;
-}
-
-interface RecentCar {
-  id: string;
+// ─────────────────────────────────────────────────────────────────────────────
+// Types  — matches actual /cars API response
+// ─────────────────────────────────────────────────────────────────────────────
+interface Car {
+  id: number;
+  brand: string;
   name: string;
-  type: string;
-  category: string;
-  price: number;
-  priceUnit: string;
+  year: number;
   image: string;
+  location: string | null;
+  price_per_hour: number | null;
+  price_per_km: number | null;
 }
 
+type CarMode = "selfdrive" | "intercity" | "both" | "service";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+const getCarMode = (car: Car): CarMode => {
+  const hasHour = (car.price_per_hour ?? 0) > 0;
+  const hasKm = (car.price_per_km ?? 0) > 0;
+  if (hasHour && hasKm) return "both";
+  if (hasHour) return "selfdrive";
+  if (hasKm) return "intercity";
+  return "service";
+};
+
+// Hide service-only cars from home screen
+const isRentable = (car: Car) => getCarMode(car) !== "service";
+
+const formatPrice = (car: Car): string => {
+  const hasHour = (car.price_per_hour ?? 0) > 0;
+  const hasKm = (car.price_per_km ?? 0) > 0;
+  if (hasHour && hasKm)
+    return `₹${car.price_per_hour}/hr · ₹${car.price_per_km}/km`;
+  if (hasHour) return `₹${car.price_per_hour}/hr`;
+  if (hasKm) return `₹${car.price_per_km}/km`;
+  return "Service only";
+};
+
+const getBadgeStyle = (mode: CarMode) => {
+  switch (mode) {
+    case "selfdrive":
+      return { label: "SELF-DRIVE", color: "#3B82F6" };
+    case "intercity":
+      return { label: "INTERCITY", color: "#8B5CF6" };
+    case "both":
+      return { label: "SELF-DRIVE + INTERCITY", color: "#F59E0B" };
+    case "service":
+      return { label: "CAR SERVICE", color: "#10B981" };
+  }
+};
+
+const getGreeting = (): string => {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+};
+
+const getFirstName = (name?: string) => (name ? name.split(" ")[0] : "there");
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-components
+// ─────────────────────────────────────────────────────────────────────────────
+function ModeBadge({ mode }: { mode: CarMode }) {
+  const { label, color } = getBadgeStyle(mode);
+  return (
+    <View
+      style={[
+        badge.wrap,
+        { backgroundColor: color + "22", borderColor: color + "44" },
+      ]}
+    >
+      <Text style={[badge.text, { color }]}>{label}</Text>
+    </View>
+  );
+}
+
+function FeaturedCard({ car, onPress }: { car: Car; onPress: () => void }) {
+  const mode = getCarMode(car);
+  return (
+    <TouchableOpacity style={fc.card} onPress={onPress} activeOpacity={0.9}>
+      <Image
+        source={{
+          uri: car.image || "https://via.placeholder.com/800x400?text=No+Image",
+        }}
+        style={fc.img}
+        resizeMode="cover"
+      />
+      <LinearGradient
+        colors={["transparent", "rgba(10,18,32,0.97)"]}
+        style={fc.gradient}
+      >
+        <ModeBadge mode={mode} />
+        <Text style={fc.carName}>
+          {car.brand} {car.name}
+        </Text>
+        <View style={fc.row}>
+          <Text style={fc.year}>{car.year}</Text>
+          {car.location ? (
+            <Text style={fc.locText}> · {car.location}</Text>
+          ) : null}
+          <View style={{ flex: 1 }} />
+          <Text style={fc.price}>{formatPrice(car)}</Text>
+        </View>
+      </LinearGradient>
+    </TouchableOpacity>
+  );
+}
+
+function ListCard({ car, onPress }: { car: Car; onPress: () => void }) {
+  const mode = getCarMode(car);
+  return (
+    <TouchableOpacity style={lc.card} onPress={onPress} activeOpacity={0.85}>
+      <Image
+        source={{
+          uri: car.image || "https://via.placeholder.com/400x200?text=No+Image",
+        }}
+        style={lc.img}
+        resizeMode="cover"
+      />
+      <View style={lc.info}>
+        <Text style={lc.brand}>{car.brand}</Text>
+        <Text style={lc.carName} numberOfLines={1}>
+          {car.name} {car.year}
+        </Text>
+        <ModeBadge mode={mode} />
+      </View>
+      <View style={lc.right}>
+        <Text style={lc.price}>{formatPrice(car)}</Text>
+        {car.location ? (
+          <View style={lc.locRow}>
+            <Ionicons
+              name="location-outline"
+              size={11}
+              color={COLORS.textSecondary}
+            />
+            <Text style={lc.locLabel} numberOfLines={1}>
+              {car.location}
+            </Text>
+          </View>
+        ) : null}
+        <Ionicons
+          name="chevron-forward"
+          size={18}
+          color={COLORS.textSecondary}
+        />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function EmptyState({ icon, message }: { icon?: any; message: string }) {
+  return (
+    <View style={es.wrap}>
+      <Ionicons
+        name={icon ?? "car-outline"}
+        size={44}
+        color={COLORS.textSecondary}
+      />
+      <Text style={es.text}>{message}</Text>
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main Screen
+// ─────────────────────────────────────────────────────────────────────────────
 export default function HomeScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
-  const [location, setLocation] = useState("San Francisco, CA");
+  const user = useAuthStore((s) => s.user);
+  const token = useAuthStore((s) => s.token);
 
-  const serviceCards: ServiceCard[] = [
+  const [cars, setCars] = useState<Car[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchCars = useCallback(
+    async (isRefresh = false) => {
+      isRefresh ? setRefreshing(true) : setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(
+          `${API_CONFIG.BASE_URL}${API_ENDPOINTS.GET_ALL_CARS}`,
+          { headers: getHeaders(token ?? undefined) },
+        );
+        if (!res.ok) throw new Error("Failed to load cars");
+        const data = await res.json();
+        const list: Car[] = Array.isArray(data) ? data : (data.cars ?? []);
+        setCars(list);
+      } catch (e: any) {
+        setError(e.message);
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [token],
+  );
+
+  useEffect(() => {
+    fetchCars();
+  }, [fetchCars]);
+
+  // ── Derived slices ──────────────────────────────────────────────────────
+  const selfDrive = cars.filter((c) => {
+    const m = getCarMode(c);
+    return m === "selfdrive" || m === "both";
+  });
+  const intercity = cars.filter((c) => {
+    const m = getCarMode(c);
+    return m === "intercity" || m === "both";
+  });
+  const serviceCars = cars.filter((c) => getCarMode(c) === "service");
+  const featured = cars; // show ALL cars in featured carousel
+
+  const serviceCards = [
     {
       id: "1",
-      icon: "car-sport",
+      icon: "car-sport" as const,
       title: "Self-Drive",
       subtitle: "Rent for any occasion",
       route: "SelfDrive",
     },
     {
       id: "2",
-      icon: "navigate",
+      icon: "navigate" as const,
       title: "Intercity",
       subtitle: "City to city travel",
       route: "Intercity",
     },
     {
       id: "3",
-      icon: "swap-horizontal",
+      icon: "swap-horizontal" as const,
       title: "Car Trade",
       subtitle: "Buy or sell your car",
       route: "Trade",
     },
     {
       id: "4",
-      icon: "construct",
+      icon: "construct" as const,
       title: "Maintenance",
       subtitle: "Repairs & checks",
       route: "Service",
     },
   ];
 
-  const featuredDeals: FeaturedDeal[] = [
-    {
-      id: "1",
-      title: "20% Off Luxury Rentals",
-      subtitle: "Drive your dream car today",
-      badge: "LIMITED OFFER",
-      image:
-        "https://images.unsplash.com/photo-1617788138017-80ad40651399?w=800",
-    },
-    {
-      id: "2",
-      title: "Free Delivery",
-      subtitle: "With every booking",
-      badge: "SERVICE",
-      image: "https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?w=800",
-    },
-  ];
+  if (loading) {
+    return (
+      <View style={s.container}>
+        <StatusBar barStyle="light-content" />
+        <View style={s.center}>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={s.loadingText}>Loading cars…</Text>
+        </View>
+      </View>
+    );
+  }
 
-  const recentlyViewed: RecentCar[] = [
-    {
-      id: "1",
-      name: "BMW M4 Competition",
-      type: "SELF-DRIVE",
-      category: "PREMIUM",
-      price: 140,
-      priceUnit: "/day",
-      image: "https://images.unsplash.com/photo-1555215695-3004980ad54e?w=400",
-    },
-    {
-      id: "2",
-      name: "Tesla Model X",
-      type: "INTERCITY",
-      category: "ELECTRIC",
-      price: 95,
-      priceUnit: "/trip",
-      image: "https://images.unsplash.com/photo-1560958089-b8a1929cea89?w=400",
-    },
-  ];
-
-  const renderHeader = () => (
-    <View style={[styles.header, { paddingTop: insets.top + SPACING.md }]}>
-      <View>
-        <Text style={styles.headerLabel}>PICK-UP LOCATION</Text>
-        <TouchableOpacity style={styles.locationButton}>
-          <Ionicons name="location" size={20} color={COLORS.primary} />
-          <Text style={styles.locationText}>{location}</Text>
+  if (error) {
+    return (
+      <View style={s.container}>
+        <StatusBar barStyle="light-content" />
+        <View style={s.center}>
           <Ionicons
-            name="chevron-down"
-            size={20}
-            color={COLORS.textSecondary}
+            name="alert-circle-outline"
+            size={56}
+            color={COLORS.error}
           />
-        </TouchableOpacity>
-      </View>
-
-      <TouchableOpacity
-        style={styles.avatarButton}
-        onPress={() => navigation.getParent()?.openDrawer()}
-      >
-        <Ionicons
-          name="person-circle-outline"
-          size={44}
-          color={COLORS.textPrimary}
-        />
-      </TouchableOpacity>
-    </View>
-  );
-
-  const renderGreeting = () => (
-    <View style={styles.greetingContainer}>
-      <Text style={styles.greeting}>
-        Hello, <Text style={styles.greetingName}>Alex</Text>
-      </Text>
-      <Text style={styles.greetingSubtitle}>Ready for your next journey?</Text>
-    </View>
-  );
-
-  const renderServiceCards = () => (
-    <View style={styles.serviceGrid}>
-      {serviceCards.map((service, index) => (
-        <TouchableOpacity
-          key={service.id}
-          style={styles.serviceCard}
-          activeOpacity={0.7}
-        >
-          <View style={styles.serviceIconContainer}>
-            <Ionicons name={service.icon} size={28} color={COLORS.primary} />
-          </View>
-          <Text style={styles.serviceTitle}>{service.title}</Text>
-          <Text style={styles.serviceSubtitle}>{service.subtitle}</Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
-
-  const renderFeaturedDeals = () => (
-    <View style={styles.section}>
-      <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>Featured Deals</Text>
-        <TouchableOpacity>
-          <Text style={styles.viewAllButton}>View All</Text>
-        </TouchableOpacity>
-      </View>
-
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.dealsContainer}
-      >
-        {featuredDeals.map((deal) => (
-          <TouchableOpacity
-            key={deal.id}
-            style={styles.dealCard}
-            activeOpacity={0.8}
-          >
-            <Image source={{ uri: deal.image }} style={styles.dealImage} />
-            <LinearGradient
-              colors={["transparent", "rgba(10, 18, 32, 0.95)"]}
-              style={styles.dealGradient}
-            >
-              {deal.badge && (
-                <View style={styles.dealBadge}>
-                  <Text style={styles.dealBadgeText}>{deal.badge}</Text>
-                </View>
-              )}
-              <Text style={styles.dealTitle}>{deal.title}</Text>
-              <Text style={styles.dealSubtitle}>{deal.subtitle}</Text>
-            </LinearGradient>
+          <Text style={s.errorTitle}>Couldn't load cars</Text>
+          <Text style={s.errorSub}>{error}</Text>
+          <TouchableOpacity style={s.retryBtn} onPress={() => fetchCars()}>
+            <Text style={s.retryText}>Try Again</Text>
           </TouchableOpacity>
-        ))}
-      </ScrollView>
-    </View>
-  );
-
-  const renderRecentlyViewed = () => (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Recently Viewed</Text>
-
-      {recentlyViewed.map((car) => (
-        <TouchableOpacity
-          key={car.id}
-          style={styles.recentCard}
-          activeOpacity={0.8}
-        >
-          <Image source={{ uri: car.image }} style={styles.recentCarImage} />
-
-          <View style={styles.recentCarInfo}>
-            <Text style={styles.recentCarName}>{car.name}</Text>
-            <Text style={styles.recentCarMeta}>
-              {car.type} • {car.category}
-            </Text>
-            <Text style={styles.recentCarPrice}>
-              ${car.price}
-              <Text style={styles.recentCarPriceUnit}>{car.priceUnit}</Text>
-            </Text>
-          </View>
-
-          <Ionicons
-            name="chevron-forward"
-            size={20}
-            color={COLORS.textSecondary}
-          />
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
+        </View>
+      </View>
+    );
+  }
 
   return (
-    <View style={styles.container}>
+    <View style={s.container}>
       <StatusBar barStyle="light-content" />
       <ScrollView
-        style={styles.scrollView}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingBottom: insets.bottom + SPACING.xxl },
-        ]}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 100 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => fetchCars(true)}
+            tintColor={COLORS.primary}
+            colors={[COLORS.primary]}
+          />
+        }
       >
-        {renderHeader()}
-        {renderGreeting()}
-        {renderServiceCards()}
-        {renderFeaturedDeals()}
-        {renderRecentlyViewed()}
+        {/* Header */}
+        <View style={[s.header, { paddingTop: insets.top + SPACING.md }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.greeting}>
+              {getGreeting()},{" "}
+              <Text style={s.greetingAccent}>{getFirstName(user?.name)}</Text>{" "}
+              👋
+            </Text>
+            <Text style={s.greetingSub}>Ready for your next journey?</Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => navigation.getParent()?.openDrawer()}
+            style={s.avatarBtn}
+          >
+            {user?.avatar ? (
+              <Image source={{ uri: user.avatar }} style={s.avatarImg} />
+            ) : (
+              <Ionicons
+                name="person-circle-outline"
+                size={44}
+                color={COLORS.textPrimary}
+              />
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* Service shortcuts */}
+        <View style={s.serviceGrid}>
+          {serviceCards.map((svc) => (
+            <TouchableOpacity
+              key={svc.id}
+              style={s.serviceCard}
+              activeOpacity={0.75}
+              onPress={() => navigation.navigate(svc.route)}
+            >
+              <View style={s.serviceIconBox}>
+                <Ionicons name={svc.icon} size={26} color={COLORS.primary} />
+              </View>
+              <Text style={s.serviceTitle}>{svc.title}</Text>
+              <Text style={s.serviceSub}>{svc.subtitle}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Live stats */}
+        {cars.length > 0 && (
+          <View style={s.statsBar}>
+            {[
+              { label: "Self-Drive", value: selfDrive.length },
+              { label: "Intercity", value: intercity.length },
+              { label: "Service", value: serviceCars.length },
+            ].map((stat, i) => (
+              <View
+                key={stat.label}
+                style={[
+                  s.statItem,
+                  i < 2 && {
+                    borderRightWidth: 1,
+                    borderRightColor: COLORS.border,
+                  },
+                ]}
+              >
+                <Text style={s.statValue}>{stat.value}</Text>
+                <Text style={s.statLabel}>{stat.label}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* Featured cars */}
+        <View style={s.section}>
+          <View style={s.sectionHeader}>
+            <Text style={s.sectionTitle}>Featured Cars</Text>
+            <TouchableOpacity onPress={() => navigation.navigate("SelfDrive")}>
+              <Text style={s.viewAll}>View All</Text>
+            </TouchableOpacity>
+          </View>
+          {cars.length === 0 ? (
+            <EmptyState message="No cars available right now" />
+          ) : (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{
+                paddingHorizontal: SPACING.xl,
+                gap: SPACING.md,
+              }}
+            >
+              {featured.map((car) => (
+                <FeaturedCard
+                  key={car.id}
+                  car={car}
+                  onPress={() =>
+                    navigation.navigate("CarDetails", { id: car.id })
+                  }
+                />
+              ))}
+            </ScrollView>
+          )}
+        </View>
+
+        {cars.length === 0 && (
+          <EmptyState message="No cars listed yet. Check back soon!" />
+        )}
       </ScrollView>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
+// ─────────────────────────────────────────────────────────────────────────────
+// Styles
+// ─────────────────────────────────────────────────────────────────────────────
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: COLORS.background },
+  center: {
     flex: 1,
-    backgroundColor: COLORS.background,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingBottom: SPACING.xxxl,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: SPACING.md,
+    padding: SPACING.xl,
   },
 
-  // Header
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
     paddingHorizontal: SPACING.xl,
-    paddingBottom: SPACING.lg,
+    paddingBottom: SPACING.xl,
   },
-  headerLabel: {
-    fontSize: FONT_SIZES.xs,
-    color: COLORS.primary,
-    fontWeight: FONT_WEIGHTS.semibold,
-    letterSpacing: 0.5,
-    marginBottom: SPACING.xs,
-  },
-  locationButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: SPACING.xs,
-  },
-  locationText: {
-    fontSize: FONT_SIZES.lg,
+  greeting: {
+    fontSize: FONT_SIZES.xxl,
     color: COLORS.textPrimary,
-    fontWeight: FONT_WEIGHTS.semibold,
+    fontWeight: FONT_WEIGHTS.bold,
   },
-  avatarButton: {
+  greetingAccent: { color: COLORS.primary },
+  greetingSub: {
+    fontSize: FONT_SIZES.md,
+    color: COLORS.textSecondary,
+    marginTop: 4,
+  },
+  avatarBtn: {
     width: 44,
     height: 44,
     alignItems: "center",
     justifyContent: "center",
   },
+  avatarImg: { width: 44, height: 44, borderRadius: 22 },
 
-  // Greeting
-  greetingContainer: {
-    paddingHorizontal: SPACING.xl,
-    marginBottom: SPACING.xxl,
-  },
-  greeting: {
-    fontSize: FONT_SIZES.hero,
-    color: COLORS.textPrimary,
-    fontWeight: FONT_WEIGHTS.bold,
-    marginBottom: SPACING.xs,
-  },
-  greetingName: {
-    color: COLORS.primary,
-  },
-  greetingSubtitle: {
-    fontSize: FONT_SIZES.lg,
-    color: COLORS.textSecondary,
-    fontWeight: FONT_WEIGHTS.regular,
-  },
-
-  // Service Cards
   serviceGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
     paddingHorizontal: SPACING.xl,
     gap: SPACING.md,
-    marginBottom: SPACING.xxl,
+    marginBottom: SPACING.xl,
   },
   serviceCard: {
     width: (width - SPACING.xl * 2 - SPACING.md) / 2,
@@ -352,9 +490,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  serviceIconContainer: {
-    width: 56,
-    height: 56,
+  serviceIconBox: {
+    width: 52,
+    height: 52,
     borderRadius: BORDER_RADIUS.md,
     backgroundColor: COLORS.cardBackgroundLight,
     alignItems: "center",
@@ -365,18 +503,33 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.lg,
     color: COLORS.textPrimary,
     fontWeight: FONT_WEIGHTS.semibold,
-    marginBottom: SPACING.xs / 2,
+    marginBottom: 2,
   },
-  serviceSubtitle: {
-    fontSize: FONT_SIZES.sm,
+  serviceSub: { fontSize: FONT_SIZES.sm, color: COLORS.textSecondary },
+
+  statsBar: {
+    flexDirection: "row",
+    marginHorizontal: SPACING.xl,
+    backgroundColor: COLORS.cardBackground,
+    borderRadius: BORDER_RADIUS.lg,
+    marginBottom: SPACING.xl,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    overflow: "hidden",
+  },
+  statItem: { flex: 1, alignItems: "center", paddingVertical: SPACING.lg },
+  statValue: {
+    fontSize: FONT_SIZES.xxl,
+    fontWeight: FONT_WEIGHTS.bold,
+    color: COLORS.primary,
+  },
+  statLabel: {
+    fontSize: FONT_SIZES.xs,
     color: COLORS.textSecondary,
-    fontWeight: FONT_WEIGHTS.regular,
+    marginTop: 2,
   },
 
-  // Section
-  section: {
-    marginBottom: SPACING.xxl,
-  },
+  section: { marginBottom: SPACING.xxl },
   sectionHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -385,69 +538,90 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.lg,
   },
   sectionTitle: {
-    fontSize: FONT_SIZES.xxl,
+    fontSize: FONT_SIZES.xl,
     color: COLORS.textPrimary,
     fontWeight: FONT_WEIGHTS.bold,
   },
-  viewAllButton: {
-    fontSize: FONT_SIZES.md,
+  viewAll: {
+    fontSize: FONT_SIZES.sm,
     color: COLORS.primary,
     fontWeight: FONT_WEIGHTS.semibold,
   },
 
-  // Featured Deals
-  dealsContainer: {
-    paddingHorizontal: SPACING.xl,
-    gap: SPACING.md,
+  loadingText: { color: COLORS.textSecondary, fontSize: FONT_SIZES.md },
+  errorTitle: {
+    fontSize: FONT_SIZES.xl,
+    color: COLORS.textPrimary,
+    fontWeight: FONT_WEIGHTS.bold,
   },
-  dealCard: {
-    width: CARD_WIDTH * 0.85,
-    height: 200,
+  errorSub: {
+    fontSize: FONT_SIZES.md,
+    color: COLORS.textSecondary,
+    textAlign: "center",
+  },
+  retryBtn: {
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: SPACING.xxl,
+    paddingVertical: SPACING.md,
+    borderRadius: BORDER_RADIUS.md,
+  },
+  retryText: {
+    color: COLORS.background,
+    fontWeight: FONT_WEIGHTS.bold,
+    fontSize: FONT_SIZES.md,
+  },
+});
+
+const badge = StyleSheet.create({
+  wrap: {
+    alignSelf: "flex-start",
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 2,
+    borderRadius: BORDER_RADIUS.sm,
+    borderWidth: 1,
+    marginBottom: 2,
+  },
+  text: {
+    fontSize: FONT_SIZES.xs,
+    fontWeight: FONT_WEIGHTS.bold,
+    letterSpacing: 0.3,
+  },
+});
+
+const fc = StyleSheet.create({
+  card: {
+    width: width * 0.72,
+    height: 210,
     borderRadius: BORDER_RADIUS.lg,
     overflow: "hidden",
     backgroundColor: COLORS.cardBackground,
   },
-  dealImage: {
-    width: "100%",
-    height: "100%",
-    resizeMode: "cover",
-  },
-  dealGradient: {
+  img: { width: "100%", height: "100%" },
+  gradient: {
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
     padding: SPACING.lg,
-    justifyContent: "flex-end",
   },
-  dealBadge: {
-    alignSelf: "flex-start",
-    backgroundColor: COLORS.primary,
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.xs / 2,
-    borderRadius: BORDER_RADIUS.sm,
-    marginBottom: SPACING.sm,
-  },
-  dealBadgeText: {
-    fontSize: FONT_SIZES.xs,
-    color: COLORS.background,
-    fontWeight: FONT_WEIGHTS.bold,
-    letterSpacing: 0.5,
-  },
-  dealTitle: {
+  carName: {
     fontSize: FONT_SIZES.xl,
     color: COLORS.textPrimary,
     fontWeight: FONT_WEIGHTS.bold,
-    marginBottom: SPACING.xs / 2,
+    marginVertical: 4,
   },
-  dealSubtitle: {
-    fontSize: FONT_SIZES.sm,
-    color: COLORS.textSecondary,
-    fontWeight: FONT_WEIGHTS.regular,
+  row: { flexDirection: "row", alignItems: "center" },
+  year: { fontSize: FONT_SIZES.sm, color: COLORS.textSecondary },
+  locText: { fontSize: FONT_SIZES.sm, color: COLORS.textSecondary },
+  price: {
+    fontSize: FONT_SIZES.md,
+    color: COLORS.primary,
+    fontWeight: FONT_WEIGHTS.bold,
   },
+});
 
-  // Recently Viewed
-  recentCard: {
+const lc = StyleSheet.create({
+  card: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: COLORS.cardBackground,
@@ -458,36 +632,44 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  recentCarImage: {
-    width: 80,
-    height: 80,
+  img: {
+    width: 90,
+    height: 70,
     borderRadius: BORDER_RADIUS.md,
     backgroundColor: COLORS.cardBackgroundLight,
   },
-  recentCarInfo: {
-    flex: 1,
-    marginLeft: SPACING.md,
-  },
-  recentCarName: {
-    fontSize: FONT_SIZES.lg,
-    color: COLORS.textPrimary,
-    fontWeight: FONT_WEIGHTS.semibold,
-    marginBottom: SPACING.xs / 2,
-  },
-  recentCarMeta: {
+  info: { flex: 1, marginLeft: SPACING.md, gap: 4 },
+  brand: {
     fontSize: FONT_SIZES.xs,
     color: COLORS.textSecondary,
-    fontWeight: FONT_WEIGHTS.medium,
-    marginBottom: SPACING.xs,
+    fontWeight: FONT_WEIGHTS.semibold,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
-  recentCarPrice: {
-    fontSize: FONT_SIZES.lg,
+  carName: {
+    fontSize: FONT_SIZES.md,
+    color: COLORS.textPrimary,
+    fontWeight: FONT_WEIGHTS.bold,
+  },
+  right: { alignItems: "flex-end", gap: 4, marginLeft: SPACING.sm },
+  price: {
+    fontSize: FONT_SIZES.md,
     color: COLORS.primary,
     fontWeight: FONT_WEIGHTS.bold,
   },
-  recentCarPriceUnit: {
-    fontSize: FONT_SIZES.sm,
+  locRow: { flexDirection: "row", alignItems: "center", gap: 2 },
+  locLabel: {
+    fontSize: FONT_SIZES.xs,
     color: COLORS.textSecondary,
-    fontWeight: FONT_WEIGHTS.regular,
+    maxWidth: 80,
   },
+});
+
+const es = StyleSheet.create({
+  wrap: {
+    alignItems: "center",
+    paddingVertical: SPACING.xxxl,
+    gap: SPACING.md,
+  },
+  text: { fontSize: FONT_SIZES.md, color: COLORS.textSecondary },
 });

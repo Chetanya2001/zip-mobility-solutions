@@ -20,6 +20,7 @@ export default function GuestNavigator() {
 
   return (
     <Tab.Navigator
+      initialRouteName="Home"
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: COLORS.tabActive,

@@ -16,9 +16,8 @@ const Drawer = createDrawerNavigator();
 export default function AppNavigator() {
   const user = useAuthStore((state) => state.user);
 
-  // switchRole in your store sets user.role to "host" or "guest"
-  // so we just read user.role — no separate viewMode needed
-  const isHost = user?.viewMode === "host";
+  // Use viewMode (set by switchRole) — falls back to role on first login
+  const isHost = (user?.viewMode ?? user?.role) === "host";
 
   return (
     <Drawer.Navigator
@@ -31,29 +30,18 @@ export default function AppNavigator() {
         overlayColor: COLORS.overlay,
       }}
     >
-      {/* Switches navigator based on active role */}
       <Drawer.Screen
         name="MainTabs"
         component={isHost ? HostNavigator : GuestNavigator}
         options={{ swipeEnabled: true }}
       />
 
-      {/*
-        HOST MODE  → MyCars only; MyBookings + PaymentHistory hidden
-        GUEST MODE → MyBookings + PaymentHistory; MyCars hidden
-      */}
-      {!isHost && (
-        <>
-          <Drawer.Screen name="MyCars" component={MyCarsScreen} />
-          <Drawer.Screen name="MyBookings" component={MyBookingsScreen} />
-          <Drawer.Screen
-            name="PaymentHistory"
-            component={PaymentHistoryScreen}
-          />
-        </>
-      )}
+      {/* Visible to both host and guest */}
+      <Drawer.Screen name="MyCars" component={MyCarsScreen} />
+      <Drawer.Screen name="MyBookings" component={MyBookingsScreen} />
+      <Drawer.Screen name="PaymentHistory" component={PaymentHistoryScreen} />
 
-      {/* Always visible */}
+      {/* Always registered */}
       <Drawer.Screen name="Settings" component={SettingsScreen} />
       <Drawer.Screen name="Help" component={HelpScreen} />
     </Drawer.Navigator>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { drawerService } from "../../../modules/drawer/drawer.service";
+import { drawerService } from "../../drawer/drawer.service";
 import {
   View,
   Text,
@@ -116,26 +116,6 @@ const mapRental = (b: any): UnifiedBooking => {
   };
 };
 
-const mapService = (b: any): UnifiedBooking => {
-  const car = b.car || {};
-  return {
-    id: String(b.id),
-    booking_category: "service",
-    status: b.status?.toLowerCase() ?? "pending",
-    carMake: car.make || "Unknown",
-    carModel:
-      [car.make, car.model, car.year].filter(Boolean).join(" ") || "My Car",
-    carImage:
-      car.thumbnail ||
-      "https://via.placeholder.com/400x200/E8F4FD/000000?text=Service",
-    createdAt: b.createdAt,
-    scheduled_at: b.scheduled_at,
-    total_price: Number(b.total_price || b.plan?.price || 0),
-    planName: b.plan?.name || "Car Service",
-    planDuration: b.plan?.duration_minutes,
-  };
-};
-
 const isDatePast = (dateStr?: string): boolean => {
   if (!dateStr) return false;
   return new Date(dateStr).getTime() < Date.now();
@@ -177,26 +157,12 @@ export default function HostBookingsScreen({ navigation }: any) {
     setLoading(true);
     try {
       // Host: fetch both host rentals and service bookings in parallel
-      const [hostResponse, guestResponse] = await Promise.all([
-        drawerService.getHostBooking(),
-        drawerService.getGuestBookings(),
-      ]);
+      const hostResponse = await drawerService.getHostBooking();
 
       const hostRental: any[] = hostResponse?.rental ?? [];
-      const hostService: any[] = hostResponse?.service ?? [];
-      const guestService: any[] = guestResponse?.service ?? [];
+      // Service bookings belong to guest mode — not shown in host bookings
 
-      // Deduplicate service bookings by id
-      const serviceMap = new Map<string, any>();
-      [...hostService, ...guestService].forEach((b) =>
-        serviceMap.set(String(b.id), b),
-      );
-      const allService = Array.from(serviceMap.values());
-
-      const mapped: UnifiedBooking[] = [
-        ...hostRental.map(mapRental),
-        ...allService.map(mapService),
-      ];
+      const mapped: UnifiedBooking[] = [...hostRental.map(mapRental)];
 
       mapped.sort(
         (a, b) =>

@@ -45,7 +45,9 @@ export default function CustomDrawerContent(props: any) {
     if (isAuthenticated) getProfile();
   }, [isAuthenticated]);
 
-  const isHost = user?.viewMode === "host";
+  // viewMode is set by switchRole() — drives current UI mode
+  // Falls back to role if viewMode hasn't been set yet (e.g. first login)
+  const isHost = (user?.viewMode ?? user?.role) === "host";
 
   const handleRoleSwitch = (value: boolean) => {
     switchRole(value ? "host" : "guest");
@@ -70,6 +72,8 @@ export default function CustomDrawerContent(props: any) {
     props.navigation.closeDrawer();
   };
 
+  // HOST mode → no account menu items (only Settings + Help remain)
+  // GUEST mode → My Cars + Bookings + Payment History
   const authenticatedMenuItems: MenuItem[] = isHost
     ? []
     : [
@@ -93,7 +97,6 @@ export default function CustomDrawerContent(props: any) {
         },
       ];
 
-  // ── Renderers ─────────────────────────────────────────────────────────────
   const renderUnauthenticatedHeader = () => (
     <View style={styles.unauthHeader}>
       <View style={styles.unauthIconContainer}>
@@ -134,7 +137,6 @@ export default function CustomDrawerContent(props: any) {
       />
       <Text style={styles.userName}>{user?.name || "User"}</Text>
       <Text style={{ color: COLORS.textSecondary }}>{user?.email}</Text>
-
       <View style={[styles.roleBadge, isHost && styles.roleBadgeHost]}>
         <Ionicons
           name={isHost ? "star" : "person"}
@@ -168,7 +170,7 @@ export default function CustomDrawerContent(props: any) {
     </TouchableOpacity>
   );
 
-  // CHANGED: removed isHostAccount guard — toggle visible to ALL authenticated users
+  // No role guard — ALL authenticated users see the toggle
   const renderRoleSwitcher = () => (
     <View style={styles.switchContainer}>
       <View style={styles.switchInfo}>
@@ -203,12 +205,11 @@ export default function CustomDrawerContent(props: any) {
         showsVerticalScrollIndicator={false}
       >
         <View style={[styles.container, { paddingTop: insets.top }]}>
-          {/* Header */}
           {isAuthenticated
             ? renderAuthenticatedHeader()
             : renderUnauthenticatedHeader()}
 
-          {/* My Account menu (mode-aware) */}
+          {/* Mode-aware account menu — hidden entirely in host mode */}
           {isAuthenticated && authenticatedMenuItems.length > 0 && (
             <View style={styles.menuSection}>
               <Text style={styles.sectionTitle}>MY ACCOUNT</Text>
@@ -216,7 +217,7 @@ export default function CustomDrawerContent(props: any) {
             </View>
           )}
 
-          {/* Role switcher — all authenticated users */}
+          {/* Role toggle — all authenticated users */}
           {isAuthenticated && (
             <View style={styles.menuSection}>
               <Text style={styles.sectionTitle}>PREFERENCES</Text>
@@ -224,7 +225,7 @@ export default function CustomDrawerContent(props: any) {
             </View>
           )}
 
-          {/* App */}
+          {/* App — always visible */}
           <View style={styles.menuSection}>
             <Text style={styles.sectionTitle}>APP</Text>
             <TouchableOpacity
@@ -246,7 +247,6 @@ export default function CustomDrawerContent(props: any) {
                 color={COLORS.textSecondary}
               />
             </TouchableOpacity>
-
             <TouchableOpacity
               style={styles.menuItem}
               onPress={() => handleNavigation("Help")}
@@ -268,7 +268,6 @@ export default function CustomDrawerContent(props: any) {
             </TouchableOpacity>
           </View>
 
-          {/* Logout */}
           {isAuthenticated && (
             <TouchableOpacity
               style={styles.logoutButton}
@@ -286,6 +285,7 @@ export default function CustomDrawerContent(props: any) {
 
       <AuthModal
         visible={modalVisible}
+        initialMode={startWithLogin ? "login" : "signup"}
         onClose={() => setModalVisible(false)}
         onSuccess={(user: any, token: any) => {
           useAuthStore.getState().setAuthData(user, token);
@@ -300,8 +300,6 @@ export default function CustomDrawerContent(props: any) {
 const styles = StyleSheet.create({
   drawerContent: { flex: 1 },
   container: { flex: 1, backgroundColor: COLORS.background },
-
-  // Unauthenticated header
   unauthHeader: {
     padding: SPACING.xl,
     alignItems: "center",
@@ -347,8 +345,6 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontWeight: FONT_WEIGHTS.semibold,
   },
-
-  // Authenticated header
   authHeader: {
     padding: SPACING.xl,
     alignItems: "center",
@@ -385,8 +381,6 @@ const styles = StyleSheet.create({
     color: COLORS.primary,
     fontWeight: FONT_WEIGHTS.semibold,
   },
-
-  // Menu
   menuSection: { marginBottom: SPACING.xl, paddingHorizontal: SPACING.xl },
   sectionTitle: {
     fontSize: FONT_SIZES.xs,
@@ -433,8 +427,6 @@ const styles = StyleSheet.create({
     color: COLORS.background,
     fontWeight: FONT_WEIGHTS.bold,
   },
-
-  // Role switcher
   switchContainer: {
     flexDirection: "row",
     alignItems: "center",
@@ -457,8 +449,6 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontWeight: FONT_WEIGHTS.medium,
   },
-
-  // Logout
   logoutButton: {
     flexDirection: "row",
     alignItems: "center",
@@ -475,7 +465,6 @@ const styles = StyleSheet.create({
     color: COLORS.error,
     fontWeight: FONT_WEIGHTS.semibold,
   },
-
   version: {
     fontSize: FONT_SIZES.xs,
     color: COLORS.textTertiary,
